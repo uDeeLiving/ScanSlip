@@ -111,43 +111,28 @@ document.addEventListener('DOMContentLoaded', () => {
             const { data: { text } } = await worker.recognize(imgSrc);
             await worker.terminate();
 
-            // 4. Cross check: Instead of extracting from QR, check if any long string from OCR exists in QR
+            // 4. Cross check: Use Longest Common Substring (LCS) to be robust against OCR typos
             const rawQr = qrCode.data.toLowerCase();
-            const cleanedText = text.replace(/\s+/g, '\n').toLowerCase(); // split by space or newline
-            const words = cleanedText.split('\n').filter(w => w.length >= 12 && /^[a-z0-9]+$/.test(w));
+            const noSpaceText = text.replace(/[\s\r\n]+/g, '').toLowerCase();
             
-            let foundMatch = false;
-            let matchedRef = "";
-
-            for (const word of words) {
-                if (rawQr.includes(word)) {
-                    foundMatch = true;
-                    matchedRef = word;
-                    break;
+            // หา Substring ที่ยาวที่สุดที่ตรงกันระหว่าง QR Code และข้อความจาก OCR
+            let longestMatch = "";
+            for (let i = 0; i < rawQr.length; i++) {
+                for (let j = i + 8; j <= rawQr.length; j++) {
+                    const sub = rawQr.substring(i, j);
+                    if (noSpaceText.includes(sub) && sub.length > longestMatch.length) {
+                        longestMatch = sub;
+                    }
                 }
             }
-            
-            // Fallback: Check if the whole OCR text has a substantial overlap with QR
-            if (!foundMatch) {
-               const noSpaceText = text.replace(/[\s\r\n]+/g, '').toLowerCase();
-               // Find longest common substring (simplified heuristic: check chunks of QR in OCR)
-               // The QR reference is typically 15-25 chars.
-               for(let i=0; i < rawQr.length - 15; i++) {
-                   const chunk = rawQr.substring(i, i+15);
-                   if (noSpaceText.includes(chunk)) {
-                       foundMatch = true;
-                       matchedRef = chunk + "...";
-                       break;
-                   }
-               }
-            }
 
-            if (foundMatch) {
-                markStepSuccess(stepOcr, descOcr, `อ่านข้อความสำเร็จ พบรหัสอ้างอิงตรงกัน!`);
-                showFinalResult(true, '✅ ผ่านการคัดกรองเบื้องต้น', 'รหัส QR Code ตรงกับข้อมูลที่พิมพ์บนสลิป');
+            // ถ้ามีส่วนที่ตรงกันยาวตั้งแต่ 8 ตัวอักษรขึ้นไป ถือว่าผ่าน (เผื่อ Tesseract อ่านอักขระบางตัวผิด)
+            if (longestMatch.length >= 8) {
+                markStepSuccess(stepOcr, descOcr, `พบข้อมูลตรงกัน! (ตรงกับ: ${longestMatch})`);
+                showFinalResult(true, '✅ ผ่านการคัดกรองเบื้องต้น', 'รหัส QR Code มีส่วนที่ตรงกับข้อมูลบนสลิป');
             } else {
-                markStepError(stepOcr, descOcr, 'อ่านข้อความสำเร็จ แต่ไม่พบรหัสอ้างอิงนี้บนสลิป!');
-                showFinalResult(false, '❌ ความเสี่ยงสูง!', 'รหัสใน QR Code ไม่ตรงกับข้อความบนสลิป อาจถูกตัดต่อแก้ไข');
+                markStepError(stepOcr, descOcr, 'อ่านข้อความสำเร็จ แต่ไม่พบรหัสอ้างอิงนี้บนสลิปเลย!');
+                showFinalResult(false, '❌ ความเสี่ยงสูง!', 'รหัสใน QR Code ไม่ตรงกับข้อความบนสลิป (อาจถูกตัดต่อแก้ไขหรือ OCR อ่านเพี้ยนมาก)');
             }
 
         } catch (error) {
