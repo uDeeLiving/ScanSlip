@@ -1,172 +1,222 @@
 document.addEventListener('DOMContentLoaded', () => {
     const fileInput = document.getElementById('file-input');
+    const folderInput = document.getElementById('folder-input');
     const dropZone = document.getElementById('drop-zone');
-    const resultSection = document.getElementById('result-section');
-    const imagePreview = document.getElementById('image-preview');
     
-    // Status elements
-    const stepQr = document.getElementById('step-qr');
-    const descQr = document.getElementById('desc-qr');
-    const stepOcr = document.getElementById('step-ocr');
-    const descOcr = document.getElementById('desc-ocr');
-    const finalResult = document.getElementById('final-result');
+    const progressContainer = document.getElementById('batch-progress-container');
+    const progressText = document.getElementById('progress-text');
+    const progressCount = document.getElementById('progress-count');
+    const progressBarFill = document.getElementById('progress-bar-fill');
+    
+    const resultSection = document.getElementById('result-section');
+    const tbody = document.getElementById('results-tbody');
+    
     const canvas = document.getElementById('processing-canvas');
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
-    // --- Drag and Drop Logic ---
+    let tesseractWorker = null;
+
+    // --- Events ---
+    folderInput.addEventListener('change', (e) => handleFiles(e.target.files));
+    fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
         dropZone.addEventListener(eventName, preventDefaults, false);
     });
 
-    function preventDefaults(e) {
-        e.preventDefault();
-        e.stopPropagation();
-    }
+    function preventDefaults(e) { e.preventDefault(); e.stopPropagation(); }
 
     ['dragenter', 'dragover'].forEach(eventName => {
         dropZone.addEventListener(eventName, () => dropZone.classList.add('dragover'), false);
     });
-
     ['dragleave', 'drop'].forEach(eventName => {
         dropZone.addEventListener(eventName, () => dropZone.classList.remove('dragover'), false);
     });
 
     dropZone.addEventListener('drop', (e) => {
-        const dt = e.dataTransfer;
-        const files = dt.files;
-        if (files.length > 0) handleFile(files[0]);
+        if (e.dataTransfer.files.length > 0) handleFiles(e.dataTransfer.files);
     }, false);
 
-    fileInput.addEventListener('change', (e) => {
-        if (e.target.files.length > 0) handleFile(e.target.files[0]);
-    });
-
-    function resetUI() {
-        resultSection.classList.remove('hidden');
-        finalResult.innerHTML = '';
-        finalResult.className = 'final-result';
-        
-        stepQr.className = 'step active';
-        descQr.textContent = 'กำลังแสกนหา QR Code...';
-        
-        stepOcr.className = 'step';
-        descOcr.textContent = 'กำลังรอคิว...';
-    }
-
-    // --- Main Processing Logic ---
-    function handleFile(file) {
-        if (!file.type.startsWith('image/')) {
-            alert('กรุณาอัปโหลดไฟล์รูปภาพเท่านั้น');
+    // --- Batch Processing ---
+    async function handleFiles(fileList) {
+        // กรองเฉพาะไฟล์ภาพ
+        const files = Array.from(fileList).filter(f => f.type.startsWith('image/'));
+        if (files.length === 0) {
+            alert('ไม่พบไฟล์รูปภาพในโฟลเดอร์ที่เลือก');
             return;
         }
 
-        resetUI();
+        // Reset UI
+        tbody.innerHTML = '';
+        resultSection.classList.remove('hidden');
+        progressContainer.classList.remove('hidden');
+        
+        // Initialize Worker if not exists
+        if (!tesseractWorker) {
+            progressText.textContent = "กำลังโหลดโมเดล AI (Tesseract)...";
+            tesseractWorker = await Tesseract.createWorker('tha+eng', 1);
+        }
 
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const imgSrc = e.target.result;
-            imagePreview.src = imgSrc;
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
             
-            const img = new Image();
-            img.onload = () => {
-                processImage(img, imgSrc);
-            };
-            img.src = imgSrc;
-        };
-        reader.readAsDataURL(file);
+            // Update Progress UI
+            progressText.textContent = `กำลังประมวลผลไฟล์: ${file.name}`;
+            progressCount.textContent = `${i + 1} / ${files.length}`;
+            progressBarFill.style.width = `${((i) / files.length) * 100}%`;
+
+            // Create placeholder row
+            const rowId = `row-${i}`;
+            const tr = document.createElement('tr');
+            tr.id = rowId;
+            tr.innerHTML = `
+                <td><img src="" class="slip-thumb" id="img-${rowId}"></td>
+                <td><div class="loader-spinner"></div> กำลังอ่านข้อมูล...</td>
+                <td>-</td>
+                <td><span class="badge badge-pending"><div class="loader-spinner"></div> รอคิว</span></td>
+            `;
+            tbody.appendChild(tr);
+            
+            // Load image visually
+            const imgSrc = URL.createObjectURL(file);
+            document.getElementById(`img-${rowId}`).src = imgSrc;
+
+            // Process image
+            await processSingleSlip(file, imgSrc, tr);
+            
+            // Update bar after finish one
+            progressBarFill.style.width = `${((i + 1) / files.length) * 100}%`;
+        }
+
+        progressText.textContent = "ประมวลผลเสร็จสิ้น!";
+        setTimeout(() => { progressContainer.classList.add('hidden'); }, 3000);
     }
 
-    async function processImage(img, imgSrc) {
+    async function processSingleSlip(file, imgSrc, tr) {
         try {
-            // 1. Setup Canvas for QR reading
+            const img = new Image();
+            await new Promise((resolve) => {
+                img.onload = resolve;
+                img.src = imgSrc;
+            });
+
+            // 1. QR Code
             canvas.width = img.width;
             canvas.height = img.height;
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
             const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-
-            // 2. Read QR Code
             const qrCode = jsQR(imageData.data, imageData.width, imageData.height);
             
             if (!qrCode) {
-                markStepError(stepQr, descQr, 'ไม่พบ QR Code ในภาพ (อาจเป็นสลิปเก่าหรือสลิปปลอม)');
-                showFinalResult(false, 'ไม่ผ่านการคัดกรอง', 'ระบบไม่สามารถตรวจจับ QR Code บนรูปภาพนี้ได้');
+                updateRowUI(tr, null, null, false, "ไม่พบ QR Code");
                 return;
             }
 
-            const refNumber = extractReferenceFromQR(qrCode.data);
-            markStepSuccess(stepQr, descQr, `พบรหัสอ้างอิง: ${refNumber}`);
+            // 2. OCR
+            const { data: { text } } = await tesseractWorker.recognize(imgSrc);
 
-            // 3. Process OCR with Tesseract
-            stepOcr.className = 'step active';
-            descOcr.textContent = 'กำลังวิเคราะห์ข้อความ (อาจใช้เวลา 3-5 วินาที)...';
+            // 3. Match QR & Extract Data
+            const isMatch = checkFuzzyMatch(qrCode.data, text);
+            const extracted = extractDataFromText(text);
 
-            const worker = await Tesseract.createWorker('tha+eng', 1, {
-                logger: m => {
-                    if(m.status === 'recognizing text') {
-                        descOcr.textContent = `กำลังวิเคราะห์ข้อความ... ${Math.round(m.progress * 100)}%`;
-                    }
+            updateRowUI(tr, extracted, qrCode.data, isMatch, isMatch ? "ผ่านการคัดกรอง" : "เสี่ยง! ข้อมูลไม่ตรง QR");
+
+        } catch (e) {
+            console.error(e);
+            updateRowUI(tr, null, null, false, "เกิดข้อผิดพลาด");
+        }
+    }
+
+    function checkFuzzyMatch(qrData, ocrText) {
+        const rawQr = qrData.toLowerCase();
+        const noSpaceText = ocrText.replace(/[\s\r\n]+/g, '').toLowerCase();
+        
+        let longestMatch = "";
+        for (let i = 0; i < rawQr.length; i++) {
+            for (let j = i + 8; j <= rawQr.length; j++) {
+                const sub = rawQr.substring(i, j);
+                if (noSpaceText.includes(sub) && sub.length > longestMatch.length) {
+                    longestMatch = sub;
                 }
+            }
+        }
+        return longestMatch.length >= 8;
+    }
+
+    // --- Heuristics Parser ---
+    function extractDataFromText(text) {
+        const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+        let data = { amount: '-', date: '-', sender: '-', receiver: '-' };
+
+        // Regex for Amount: numbers with commas and .00 or .xx at the end.
+        // We look for the largest such number to avoid catching small numbers like fees (0.00).
+        const amountRegex = /[\d,]+\.\d{2}/g;
+        const matches = text.match(amountRegex);
+        if (matches) {
+            // Convert strings to floats to find max
+            let maxAmt = -1;
+            let maxStr = '-';
+            matches.forEach(m => {
+                let val = parseFloat(m.replace(/,/g, ''));
+                if (val > maxAmt) { maxAmt = val; maxStr = m; }
             });
-
-            const { data: { text } } = await worker.recognize(imgSrc);
-            await worker.terminate();
-
-            // 4. Cross check: Use Longest Common Substring (LCS) to be robust against OCR typos
-            const rawQr = qrCode.data.toLowerCase();
-            const noSpaceText = text.replace(/[\s\r\n]+/g, '').toLowerCase();
-            
-            // หา Substring ที่ยาวที่สุดที่ตรงกันระหว่าง QR Code และข้อความจาก OCR
-            let longestMatch = "";
-            for (let i = 0; i < rawQr.length; i++) {
-                for (let j = i + 8; j <= rawQr.length; j++) {
-                    const sub = rawQr.substring(i, j);
-                    if (noSpaceText.includes(sub) && sub.length > longestMatch.length) {
-                        longestMatch = sub;
-                    }
-                }
-            }
-
-            // ถ้ามีส่วนที่ตรงกันยาวตั้งแต่ 8 ตัวอักษรขึ้นไป ถือว่าผ่าน (เผื่อ Tesseract อ่านอักขระบางตัวผิด)
-            if (longestMatch.length >= 8) {
-                markStepSuccess(stepOcr, descOcr, `พบข้อมูลตรงกัน! (ตรงกับ: ${longestMatch})`);
-                showFinalResult(true, '✅ ผ่านการคัดกรองเบื้องต้น', 'รหัส QR Code มีส่วนที่ตรงกับข้อมูลบนสลิป');
-            } else {
-                markStepError(stepOcr, descOcr, 'อ่านข้อความสำเร็จ แต่ไม่พบรหัสอ้างอิงนี้บนสลิปเลย!');
-                showFinalResult(false, '❌ ความเสี่ยงสูง!', 'รหัสใน QR Code ไม่ตรงกับข้อความบนสลิป (อาจถูกตัดต่อแก้ไขหรือ OCR อ่านเพี้ยนมาก)');
-            }
-
-        } catch (error) {
-            console.error("Error processing image:", error);
-            showFinalResult(false, 'เกิดข้อผิดพลาด', 'ไม่สามารถประมวลผลรูปภาพได้: ' + error.message);
+            data.amount = maxStr;
         }
-    }
 
-    // --- Helper Functions ---
-    function extractReferenceFromQR(qrData) {
-        // หา string ยาวๆ ที่น่าจะเป็น reference (อย่างน้อย 15 ตัวอักษร)
-        const matches = qrData.match(/[A-Za-z0-9]{15,30}/g);
-        if (matches && matches.length > 0) {
-            // คืนค่าตัวที่ยาวที่สุด
-            return matches.reduce((a, b) => a.length > b.length ? a : b);
+        // Regex for Date: 
+        // Style 1: 28 มิ.ย. 69
+        // Style 2: 29 มิ.ย. 2569
+        const dateRegex = /\d{1,2}\s*(ม\.ค\.|ก\.พ\.|มี\.ค\.|เม\.ย\.|พ\.ค\.|มิ\.ย\.|ก\.ค\.|ส\.ค\.|ก\.ย\.|ต\.ค\.|พ\.ย\.|ธ\.ค\.)\s*\d{2,4}/;
+        const dateMatch = text.match(dateRegex);
+        if (dateMatch) data.date = dateMatch[0];
+
+        // Find Sender and Receiver using simple heuristics (Very Best Effort due to OCR flaws)
+        for (let i = 0; i < lines.length; i++) {
+            let line = lines[i];
+            // KBank sender pattern: นาย... / นาง...
+            if (line.includes('นาย ') || line.includes('นาง ') || line.includes('น.ส.')) {
+                if (data.sender === '-') data.sender = line;
+                else if (data.receiver === '-') data.receiver = line;
+            }
+            // PromptPay pattern
+            if (line.includes('พร้อมเพย์') || line.includes('PromptPay')) {
+                data.receiver = line;
+            }
+            // SCB 'จาก' pattern
+            if (line.startsWith('จาก') && lines[i+1]) {
+                data.sender = lines[i+1];
+            }
+            // SCB 'ไปยัง' pattern
+            if (line.startsWith('ไปยัง') && lines[i+1]) {
+                data.receiver = lines[i+1];
+            }
         }
-        return qrData; // fallback
+
+        return data;
     }
 
-    function markStepSuccess(element, textElement, msg) {
-        element.className = 'step success';
-        textElement.textContent = msg;
-    }
+    function updateRowUI(tr, data, qrData, isSuccess, msg) {
+        if (!data) data = { amount: 'ไม่พบ', date: 'ไม่พบ', sender: 'ไม่พบ', receiver: 'ไม่พบ' };
 
-    function markStepError(element, textElement, msg) {
-        element.className = 'step error';
-        textElement.textContent = msg;
-    }
-
-    function showFinalResult(isSuccess, title, desc) {
-        finalResult.className = `final-result ${isSuccess ? 'success' : 'error'}`;
-        finalResult.innerHTML = `
-            <h3>${title}</h3>
-            <p>${desc}</p>
+        tr.innerHTML = `
+            <td><img src="${tr.querySelector('img').src}" class="slip-thumb"></td>
+            <td>
+                <div class="extracted-data">
+                    <span class="data-amount">฿ ${data.amount}</span>
+                    <span class="data-date">📅 ${data.date}</span>
+                </div>
+            </td>
+            <td>
+                <div class="party-info">
+                    <span class="party-from">📤 ${data.sender}</span>
+                    <span class="party-to">📥 ${data.receiver}</span>
+                </div>
+            </td>
+            <td>
+                <span class="badge ${isSuccess ? 'badge-success' : 'badge-error'}">
+                    ${isSuccess ? '✅' : '❌'} ${msg}
+                </span>
+            </td>
         `;
     }
 });
