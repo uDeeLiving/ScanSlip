@@ -148,12 +148,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
         let data = { amount: '-', date: '-', sender: '-', receiver: '-' };
 
-        // Regex for Amount: numbers with commas and .00 or .xx at the end.
-        // We look for the largest such number to avoid catching small numbers like fees (0.00).
+        // 1. Amount
         const amountRegex = /[\d,]+\.\d{2}/g;
         const matches = text.match(amountRegex);
         if (matches) {
-            // Convert strings to floats to find max
             let maxAmt = -1;
             let maxStr = '-';
             matches.forEach(m => {
@@ -163,33 +161,47 @@ document.addEventListener('DOMContentLoaded', () => {
             data.amount = maxStr;
         }
 
-        // Regex for Date: 
-        // Style 1: 28 มิ.ย. 69
-        // Style 2: 29 มิ.ย. 2569
-        const dateRegex = /\d{1,2}\s*(ม\.ค\.|ก\.พ\.|มี\.ค\.|เม\.ย\.|พ\.ค\.|มิ\.ย\.|ก\.ค\.|ส\.ค\.|ก\.ย\.|ต\.ค\.|พ\.ย\.|ธ\.ค\.)\s*\d{2,4}/;
+        // 2. Date
+        // รองรับจุด (ม.ค. หรือ มค) และช่องว่างที่เพี้ยนจาก OCR
+        const dateRegex = /\d{1,2}\s*(ม\.?ค\.?|ก\.?พ\.?|มี\.?ค\.?|เม\.?ย\.?|พ\.?ค\.?|มิ\.?ย\.?|ก\.?ค\.?|ส\.?ค\.?|ก\.?ย\.?|ต\.?ค\.?|พ\.?ย\.?|ธ\.?ค\.?|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s*\d{2,4}/i;
         const dateMatch = text.match(dateRegex);
         if (dateMatch) data.date = dateMatch[0];
 
-        // Find Sender and Receiver using simple heuristics (Very Best Effort due to OCR flaws)
+        // 3. Sender & Receiver Names
+        const nameKeywords = ['นาย', 'นาง', 'น.ส.', 'ด.ช.', 'ด.ญ.', 'mr.', 'ms.', 'mrs.', 'บริษัท', 'บจก', 'หจก'];
+        let foundNames = [];
+
         for (let i = 0; i < lines.length; i++) {
-            let line = lines[i];
-            // KBank sender pattern: นาย... / นาง...
-            if (line.includes('นาย ') || line.includes('นาง ') || line.includes('น.ส.')) {
-                if (data.sender === '-') data.sender = line;
-                else if (data.receiver === '-') data.receiver = line;
+            let line = lines[i].toLowerCase();
+            let originalLine = lines[i];
+
+            // เช็คว่าบรรทัดนี้มีคำนำหน้าชื่อหรือไม่
+            let hasTitle = nameKeywords.some(kw => line.includes(kw));
+            if (hasTitle) {
+                // ลบคำว่า "จาก" หรือ "ไปยัง" หรือ "ชื่อผู้โอน" ออกเผื่อติดมา
+                let cleanName = originalLine.replace(/^(จาก|ไปยัง|ผู้โอน|ผู้รับโอน)\s*/, '').trim();
+                foundNames.push(cleanName);
             }
-            // PromptPay pattern
-            if (line.includes('พร้อมเพย์') || line.includes('PromptPay')) {
-                data.receiver = line;
-            }
-            // SCB 'จาก' pattern
-            if (line.startsWith('จาก') && lines[i+1]) {
-                data.sender = lines[i+1];
-            }
-            // SCB 'ไปยัง' pattern
-            if (line.startsWith('ไปยัง') && lines[i+1]) {
-                data.receiver = lines[i+1];
-            }
+        }
+
+        // ถ้าเจอชื่อ 2 ชื่อ กำหนดเป็นผู้โอนและผู้รับ
+        if (foundNames.length >= 1) data.sender = foundNames[0];
+        if (foundNames.length >= 2) data.receiver = foundNames[1];
+
+        // กรณีไม่พบชื่อด้วยคำนำหน้า ให้ลองใช้ Heuristics แบบ "จาก/ไปยัง"
+        if (data.sender === '-') {
+            const fromIndex = lines.findIndex(l => l.startsWith('จาก'));
+            if (fromIndex !== -1 && lines[fromIndex + 1]) data.sender = lines[fromIndex + 1];
+        }
+        if (data.receiver === '-') {
+            const toIndex = lines.findIndex(l => l.startsWith('ไปยัง'));
+            if (toIndex !== -1 && lines[toIndex + 1]) data.receiver = lines[toIndex + 1];
+        }
+
+        // กรณีเป็น PromptPay / e-Wallet (ไม่มีคำนำหน้า) และยังไม่พบชื่อผู้รับ
+        if (data.receiver === '-') {
+            const ppLine = lines.find(l => l.includes('พร้อมเพย์') || l.toLowerCase().includes('promptpay') || l.toLowerCase().includes('wallet'));
+            if (ppLine) data.receiver = ppLine;
         }
 
         return data;
