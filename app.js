@@ -104,18 +104,21 @@ document.addEventListener('DOMContentLoaded', () => {
             canvas.width = img.width;
             canvas.height = img.height;
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const qrCode = jsQR(imageData.data, imageData.width, imageData.height);
+            const originalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const qrCode = jsQR(originalImageData.data, originalImageData.width, originalImageData.height);
             
             if (!qrCode) {
                 updateRowUI(tr, null, null, false, "ไม่พบ QR Code");
                 return;
             }
 
-            // 2. OCR
-            const { data: { text } } = await tesseractWorker.recognize(imgSrc);
+            // 2. Preprocess Image (Grayscale + Contrast) for better OCR
+            const processedImgSrc = preprocessImage(canvas, ctx, canvas.width, canvas.height);
 
-            // 3. Match QR & Extract Data
+            // 3. OCR (using processed image instead of original)
+            const { data: { text } } = await tesseractWorker.recognize(processedImgSrc);
+
+            // 4. Match QR & Extract Data
             const isMatch = checkFuzzyMatch(qrCode.data, text);
             const extracted = extractDataFromText(text);
 
@@ -125,6 +128,41 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error(e);
             updateRowUI(tr, null, null, false, "เกิดข้อผิดพลาด");
         }
+    }
+
+    function preprocessImage(canvas, ctx, width, height) {
+        const imageData = ctx.getImageData(0, 0, width, height);
+        const data = imageData.data;
+        
+        // Increase contrast factor
+        const contrast = 70; // 0 to 255
+        const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+        
+        for (let i = 0; i < data.length; i += 4) {
+            let r = data[i];
+            let g = data[i+1];
+            let b = data[i+2];
+            
+            // Grayscale (Luminance)
+            let gray = 0.299 * r + 0.587 * g + 0.114 * b;
+            
+            // Apply contrast
+            gray = factor * (gray - 128) + 128;
+            
+            // Thresholding: Blow out light colors (background/watermarks) to white
+            if (gray > 170) {
+                gray = 255;
+            } else if (gray < 0) {
+                gray = 0;
+            }
+            
+            data[i] = gray;
+            data[i+1] = gray;
+            data[i+2] = gray;
+        }
+        
+        ctx.putImageData(imageData, 0, 0);
+        return canvas.toDataURL("image/jpeg", 1.0);
     }
 
     function checkFuzzyMatch(qrData, ocrText) {
