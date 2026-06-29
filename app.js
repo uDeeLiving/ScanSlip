@@ -100,12 +100,11 @@ document.addEventListener('DOMContentLoaded', () => {
             stepOcr.className = 'step active';
             descOcr.textContent = 'กำลังวิเคราะห์ข้อความ (อาจใช้เวลา 3-5 วินาที)...';
 
-            const worker = await Tesseract.createWorker('tha+eng');
-            
-            // Show progress
-            worker.on('log', m => {
-                if(m.status === 'recognizing text') {
-                    descOcr.textContent = `กำลังวิเคราะห์ข้อความ... ${Math.round(m.progress * 100)}%`;
+            const worker = await Tesseract.createWorker('tha+eng', 1, {
+                logger: m => {
+                    if(m.status === 'recognizing text') {
+                        descOcr.textContent = `กำลังวิเคราะห์ข้อความ... ${Math.round(m.progress * 100)}%`;
+                    }
                 }
             });
 
