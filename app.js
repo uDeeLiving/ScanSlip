@@ -182,9 +182,30 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- Heuristics Parser ---
+    const bankDict = {
+        'กสิกร': ['kbank', 'กสิกร', 'k+', 'k-plus'],
+        'ไทยพาณิชย์': ['scb', 'ไทยพาณิชย์'],
+        'กรุงไทย': ['ktb', 'กรุงไทย', 'krungthai'],
+        'กรุงเทพ': ['bbl', 'กรุงเทพ', 'bangkok', 'bualuang'],
+        'กรุงศรี': ['bay', 'กรุงศรี', 'krungsri'],
+        'ออมสิน': ['ออมสิน', 'gsb'],
+        'ทีทีบี': ['ttb', 'ทหารไทย', 'ธนชาต'],
+        'พร้อมเพย์': ['พร้อมเพย์', 'promptpay', 'wallet']
+    };
+
+    function findBankInText(text) {
+        text = text.toLowerCase();
+        for (const [bankName, keywords] of Object.entries(bankDict)) {
+            if (keywords.some(kw => text.includes(kw))) {
+                return bankName;
+            }
+        }
+        return null;
+    }
+
     function extractDataFromText(text) {
         const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-        let data = { amount: '-', date: '-', sender: '-', receiver: '-' };
+        let data = { amount: '-', date: '-', sender: '-', receiver: '-', senderBank: '', receiverBank: '' };
 
         // 1. Amount
         const amountRegex = /[\d,]+\.\d{2}/g;
@@ -205,48 +226,101 @@ document.addEventListener('DOMContentLoaded', () => {
         const dateMatch = text.match(dateRegex);
         if (dateMatch) data.date = dateMatch[0];
 
-        // 3. Sender & Receiver Names
+        // 3. Sender & Receiver Names (Heuristics based on slip layouts)
         const nameKeywords = ['นาย', 'นาง', 'น.ส.', 'ด.ช.', 'ด.ญ.', 'mr.', 'ms.', 'mrs.', 'บริษัท', 'บจก', 'หจก'];
-        let foundNames = [];
+        
+        // กวาดหาคำว่า "จาก" และ "ไปยัง" ก่อน (เพื่อความแม่นยำของ SCB และธนาคารอื่นๆ ที่มี Label ชัดเจน)
+        let foundFromLabel = false;
+        let foundToLabel = false;
 
         for (let i = 0; i < lines.length; i++) {
             let line = lines[i].toLowerCase();
             let originalLine = lines[i];
 
-            // เช็คว่าบรรทัดนี้มีคำนำหน้าชื่อหรือไม่
-            let hasTitle = nameKeywords.some(kw => line.includes(kw));
-            if (hasTitle) {
-                // ลบคำว่า "จาก" หรือ "ไปยัง" หรือ "ชื่อผู้โอน" ออกเผื่อติดมา
-                let cleanName = originalLine.replace(/^(จาก|ไปยัง|ผู้โอน|ผู้รับโอน)\s*/, '').trim();
-                foundNames.push(cleanName);
+            if (line.startsWith('จาก') || line === 'ผู้โอน') {
+                foundFromLabel = true;
+                // ชื่อผู้โอนมักจะอยู่บรรทัดถัดไป หรือบรรทัดถัดๆ ไป (ข้ามบรรทัดว่าง)
+                for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
+                    let nextLine = lines[j].replace(/^[o\(\)0-9\-]+/, '').trim(); // ลบพวก O) หรือตัวเลขบัญชีที่ติดมา
+                    if (nextLine.length > 3 && !nextLine.match(/^x{3}/i)) {
+                        data.sender = lines[j];
+                        break;
+                    }
+                }
+            }
+            else if (line.startsWith('ไปยัง') || line.startsWith('ผู้รับโอน') || line.startsWith('รับเงิน')) {
+                foundToLabel = true;
+                // ชื่อผู้รับมักจะอยู่บรรทัดถัดไป
+                for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
+                    let nextLine = lines[j].replace(/^[o\(\)0-9\-]+/, '').trim();
+                    if (nextLine.length > 3 && !nextLine.match(/^x{3}/i)) {
+                        data.receiver = lines[j];
+                        break;
+                    }
+                }
             }
         }
 
-        // ถ้าเจอชื่อ 2 ชื่อ กำหนดเป็นผู้โอนและผู้รับ
-        if (foundNames.length >= 1) data.sender = foundNames[0];
-        if (foundNames.length >= 2) data.receiver = foundNames[1];
-
-        // กรณีไม่พบชื่อด้วยคำนำหน้า ให้ลองใช้ Heuristics แบบ "จาก/ไปยัง"
-        if (data.sender === '-') {
-            const fromIndex = lines.findIndex(l => l.startsWith('จาก'));
-            if (fromIndex !== -1 && lines[fromIndex + 1]) data.sender = lines[fromIndex + 1];
+        // กรณีที่ไม่มี Label ชัดเจน (เช่น KBank) ให้ใช้กฎ: บน = ผู้โอน, ล่าง = ผู้รับ 
+        if (data.sender === '-' || data.receiver === '-') {
+            let foundNames = [];
+            for (let i = 0; i < lines.length; i++) {
+                let line = lines[i].toLowerCase();
+                let hasTitle = nameKeywords.some(kw => line.includes(kw));
+                if (hasTitle) {
+                    foundNames.push(lines[i].replace(/^(จาก|ไปยัง|ผู้โอน|ผู้รับโอน)\s*/, '').trim());
+                }
+            }
+            
+            // กฎพื้นฐาน: ชื่อแรกที่เจอคือผู้โอน, ชื่อที่สองคือผู้รับ
+            if (data.sender === '-' && foundNames.length >= 1) data.sender = foundNames[0];
+            if (data.receiver === '-' && foundNames.length >= 2) data.receiver = foundNames[1];
         }
-        if (data.receiver === '-') {
-            const toIndex = lines.findIndex(l => l.startsWith('ไปยัง'));
-            if (toIndex !== -1 && lines[toIndex + 1]) data.receiver = lines[toIndex + 1];
-        }
 
-        // กรณีเป็น PromptPay / e-Wallet (ไม่มีคำนำหน้า) และยังไม่พบชื่อผู้รับ
+        // กรณี PromptPay (ไม่มีคำนำหน้า และยังไม่มีชื่อผู้รับ)
         if (data.receiver === '-') {
             const ppLine = lines.find(l => l.includes('พร้อมเพย์') || l.toLowerCase().includes('promptpay') || l.toLowerCase().includes('wallet'));
             if (ppLine) data.receiver = ppLine;
+        }
+
+        // 4. Sender & Receiver Banks
+        // หาธนาคารผู้โอนจาก 7 บรรทัดแรก (ส่วนหัวสลิป)
+        for (let i = 0; i < Math.min(7, lines.length); i++) {
+            let bank = findBankInText(lines[i]);
+            if (bank && bank !== 'พร้อมเพย์') {
+                data.senderBank = bank;
+                break;
+            }
+        }
+
+        // หาธนาคารผู้รับจากบริเวณใต้ชื่อผู้รับ
+        let receiverIndex = lines.findIndex(l => l === data.receiver);
+        if (receiverIndex !== -1) {
+            // ค้นหาในบรรทัดที่เป็นชื่อผู้รับ และ 2 บรรทัดถัดไป
+            for (let i = receiverIndex; i < Math.min(receiverIndex + 3, lines.length); i++) {
+                let bank = findBankInText(lines[i]);
+                if (bank) {
+                    data.receiverBank = bank;
+                    break;
+                }
+            }
+        }
+
+        // Fallback: ถ้าชื่อผู้รับมีคำว่าพร้อมเพย์ ให้เป็นพร้อมเพย์
+        if (!data.receiverBank && data.receiver !== '-') {
+            if (data.receiver.includes('พร้อมเพย์') || data.receiver.toLowerCase().includes('promptpay') || data.receiver.toLowerCase().includes('wallet')) {
+                data.receiverBank = 'พร้อมเพย์';
+            }
         }
 
         return data;
     }
 
     function updateRowUI(tr, data, qrData, isSuccess, msg) {
-        if (!data) data = { amount: 'ไม่พบ', date: 'ไม่พบ', sender: 'ไม่พบ', receiver: 'ไม่พบ' };
+        if (!data) data = { amount: 'ไม่พบ', date: 'ไม่พบ', sender: 'ไม่พบ', receiver: 'ไม่พบ', senderBank: '', receiverBank: '' };
+
+        const senderText = data.senderBank ? `${data.sender} <small style="color:#94A3B8">(${data.senderBank})</small>` : data.sender;
+        const receiverText = data.receiverBank ? `${data.receiver} <small style="color:#94A3B8">(${data.receiverBank})</small>` : data.receiver;
 
         tr.innerHTML = `
             <td><img src="${tr.querySelector('img').src}" class="slip-thumb"></td>
@@ -258,8 +332,8 @@ document.addEventListener('DOMContentLoaded', () => {
             </td>
             <td>
                 <div class="party-info">
-                    <span class="party-from">📤 ${data.sender}</span>
-                    <span class="party-to">📥 ${data.receiver}</span>
+                    <span class="party-from">📤 ${senderText}</span>
+                    <span class="party-to">📥 ${receiverText}</span>
                 </div>
             </td>
             <td>
