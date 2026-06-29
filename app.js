@@ -111,12 +111,39 @@ document.addEventListener('DOMContentLoaded', () => {
             const { data: { text } } = await worker.recognize(imgSrc);
             await worker.terminate();
 
-            // 4. Cross check
-            const cleanedText = text.replace(/\s+/g, '').toLowerCase();
-            const cleanedRef = refNumber.toLowerCase();
+            // 4. Cross check: Instead of extracting from QR, check if any long string from OCR exists in QR
+            const rawQr = qrCode.data.toLowerCase();
+            const cleanedText = text.replace(/\s+/g, '\n').toLowerCase(); // split by space or newline
+            const words = cleanedText.split('\n').filter(w => w.length >= 12 && /^[a-z0-9]+$/.test(w));
+            
+            let foundMatch = false;
+            let matchedRef = "";
 
-            if (cleanedText.includes(cleanedRef)) {
-                markStepSuccess(stepOcr, descOcr, 'อ่านข้อความสำเร็จ พบรหัสอ้างอิงตรงกัน!');
+            for (const word of words) {
+                if (rawQr.includes(word)) {
+                    foundMatch = true;
+                    matchedRef = word;
+                    break;
+                }
+            }
+            
+            // Fallback: Check if the whole OCR text has a substantial overlap with QR
+            if (!foundMatch) {
+               const noSpaceText = text.replace(/[\s\r\n]+/g, '').toLowerCase();
+               // Find longest common substring (simplified heuristic: check chunks of QR in OCR)
+               // The QR reference is typically 15-25 chars.
+               for(let i=0; i < rawQr.length - 15; i++) {
+                   const chunk = rawQr.substring(i, i+15);
+                   if (noSpaceText.includes(chunk)) {
+                       foundMatch = true;
+                       matchedRef = chunk + "...";
+                       break;
+                   }
+               }
+            }
+
+            if (foundMatch) {
+                markStepSuccess(stepOcr, descOcr, `อ่านข้อความสำเร็จ พบรหัสอ้างอิงตรงกัน!`);
                 showFinalResult(true, '✅ ผ่านการคัดกรองเบื้องต้น', 'รหัส QR Code ตรงกับข้อมูลที่พิมพ์บนสลิป');
             } else {
                 markStepError(stepOcr, descOcr, 'อ่านข้อความสำเร็จ แต่ไม่พบรหัสอ้างอิงนี้บนสลิป!');
