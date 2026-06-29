@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Slip Screener - ตรวจสอบสลิป</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Kanit:wght@300;400;500;600&display=swap" rel="stylesheet">
+    
+    <!-- CSS -->
+    <link rel="stylesheet" href="index.css">
+    
+    <!-- External Libraries -->
+    <!-- Tesseract.js for OCR -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <!-- jsQR for QR Code scanning -->
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+</head>
+<body>
+    <div class="background-circles">
+        <div class="circle circle-1"></div>
+        <div class="circle circle-2"></div>
+        <div class="circle circle-3"></div>
+    </div>
+
+    <main class="container">
+        <header>
+            <div class="logo-container">
+                <svg class="shield-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                </svg>
+            </div>
+            <h1>ระบบคัดกรองสลิปเบื้องต้น</h1>
+            <p>อัปโหลดรูปภาพสลิปโอนเงินเพื่อตรวจสอบความถูกต้องของ QR Code</p>
+        </header>
+
+        <section class="upload-section" id="drop-zone">
+            <input type="file" id="file-input" accept="image/*" hidden>
+            <label for="file-input" class="upload-label">
+                <div class="upload-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="17 8 12 3 7 8"></polyline>
+                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                </div>
+                <h3>คลิกเพื่ออัปโหลดสลิป</h3>
+                <p>หรือลากไฟล์มาวางที่นี่ (รองรับ JPG, PNG)</p>
+            </label>
+        </section>
+
+        <!-- Hidden canvas for image processing -->
+        <canvas id="processing-canvas" hidden></canvas>
+
+        <section class="result-section hidden" id="result-section">
+            <div class="preview-container">
+                <img id="image-preview" src="" alt="Slip Preview">
+            </div>
+
+            <div class="status-panel">
+                <div class="step" id="step-qr">
+                    <div class="step-icon"></div>
+                    <div class="step-content">
+                        <h4>ตรวจหา QR Code</h4>
+                        <p class="step-desc" id="desc-qr">กำลังรอประมวลผล...</p>
+                    </div>
+                </div>
+
+                <div class="step" id="step-ocr">
+                    <div class="step-icon"></div>
+                    <div class="step-content">
+                        <h4>อ่านข้อความบนสลิป</h4>
+                        <p class="step-desc" id="desc-ocr">กำลังรอประมวลผล...</p>
+                    </div>
+                </div>
+
+                <div class="final-result" id="final-result">
+                    <!-- Dynamic Result Inserted Here -->
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>
